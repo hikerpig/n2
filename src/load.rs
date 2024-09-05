@@ -48,11 +48,11 @@ impl<'a> eval::Env for BuildImplicitVars<'a> {
 /// A lookup that caches the results of evaluating a rule's variables.
 struct Lookup<'a> {
     rule: &'a SmallMap<String, EvalString<String>>,
-    envs: &'a [&'a dyn Env],
+    envs: Vec<&'a dyn Env>,
     vars: SmallMap<&'a str, String>,
 }
 impl<'a> Lookup<'a> {
-    pub fn new(rule: &'a SmallMap<String, EvalString<String>>, envs: &'a [&'a dyn Env]) -> Self {
+    pub fn new(rule: &'a SmallMap<String, EvalString<String>>, envs: Vec<&'a dyn Env>) -> Self {
         Lookup {
             rule,
             envs,
@@ -60,10 +60,13 @@ impl<'a> Lookup<'a> {
         }
     }
     pub fn find(&mut self, key: &'a str) -> Option<String> {
+        println!("find key: {:?}", key);
         let mut combined_list: Vec<&dyn Env> = vec![&self.vars];
+        println!("self.envs list len: {:?}", self.envs.len());
         self.envs.iter().for_each(|&value| {
             combined_list.push(value);
         });
+        println!("combined  list len: {:?}", combined_list.len());
         let result = match self.rule.get(key) {
             Some(val) => Some(val.evaluate(combined_list.as_slice())),
             None => None,
@@ -71,6 +74,7 @@ impl<'a> Lookup<'a> {
         if result.is_some() {
             self.vars.insert(key, result.clone().unwrap());
         }
+        println!("got: {:?}", result);
         return result;
     }
 }
@@ -160,10 +164,10 @@ impl Loader {
         // temp variable in order to not move all of b into the closure
         let build_vars = &b.vars;
         let env_list: Vec<&dyn Env> = vec![&implicit_vars, build_vars, env];
-        let mut lookup = Lookup::new(rule, &env_list);
+        let mut lookup = Lookup::new(rule, env_list);
 
-        let rspfile_path = lookup.find("rspfile");
         let rspfile_content = lookup.find("rspfile_content");
+        let rspfile_path = lookup.find("rspfile");
         let rspfile = match (&rspfile_path, rspfile_content) {
             (None, None) => None,
             (Some(path), Some(content)) => Some(RspFile {

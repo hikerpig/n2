@@ -73,9 +73,16 @@ impl<T: AsRef<str>> EvalString<T> {
     pub fn evaluate(&self, envs: &[&dyn Env]) -> String {
         let mut result = String::new();
         result.reserve(self.calc_evaluated_length(envs));
+
         self.evaluate_inner(&mut result, envs);
         result
     }
+}
+
+impl core::fmt::Debug for dyn Env {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+			write!(f, "Env{{{:?}}}", self)
+	}
 }
 
 impl EvalString<&str> {

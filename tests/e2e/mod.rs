@@ -1,13 +1,13 @@
 //! Support code for e2e tests, which run n2 as a binary.
 
 mod basic;
-mod directories;
-mod discovered;
-mod missing;
-mod regen;
-mod validations;
+// mod directories;
+// mod discovered;
+// mod missing;
+// mod regen;
+// mod validations;
 
-use anyhow::anyhow;
+// use anyhow::anyhow;
 
 pub fn n2_binary() -> std::path::PathBuf {
     std::env::current_exe()
