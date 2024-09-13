@@ -471,3 +471,42 @@ build foo: write_file
     assert_eq!(space.read("foo")?, b"Hello, world!\n");
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn shell_escape_for_in() -> anyhow::Result<()> {
+    let space = TestSpace::new()?;
+    space.write("file space.txt", "Hello, world!")?;
+    space.write(
+        "build.ninja",
+        "
+rule copy
+  command = cp ${in} ${out}
+
+build foo.txt: copy file$ space.txt
+",
+    )?;
+    space.run_expect(&mut n2_command(vec!["foo.txt"]))?;
+    assert_eq!(space.read("foo.txt")?, b"Hello, world!");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_no_escape_in_when_it_is_rspfile_content() -> anyhow::Result<()> {
+    let space = TestSpace::new()?;
+    space.write(
+        "build.ninja",
+        "
+rule copy_rspfile
+    command = cp $out.rsp $out
+    rspfile = $out.rsp
+
+build foo: copy_rspfile
+    rspfile_content = Hello, world!
+",
+    )?;
+    space.run_expect(&mut n2_command(vec!["foo"]))?;
+    assert_eq!(space.read("foo")?, b"Hello, world!");
+    Ok(())
+}

@@ -12,6 +12,9 @@ use std::borrow::Cow;
 /// need multiple environments in order to be fully expanded.
 pub trait Env {
     fn get_var(&self, var: &str) -> Option<EvalString<Cow<str>>>;
+    fn get_var_shell_escape(&self, var: &str) -> Option<EvalString<Cow<str>>> {
+        self.get_var(var)
+    }
 }
 
 /// One token within an EvalString, either literal text or a variable reference.
@@ -19,6 +22,12 @@ pub trait Env {
 pub enum EvalPart<T: AsRef<str>> {
     Literal(T),
     VarRef(T),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalEscapeKind {
+    ShellEscape,
+    DoNotEscape,
 }
 
 /// A parsed but unexpanded variable-reference string, e.g. "cc $in -o $out".
@@ -32,15 +41,23 @@ impl<T: AsRef<str>> EvalString<T> {
         EvalString(parts)
     }
 
-    fn evaluate_inner(&self, result: &mut String, envs: &[&dyn Env]) {
+    fn evaluate_inner(&self, result: &mut String, envs: &[&dyn Env], escape_kind: &EvalEscapeKind) {
         for part in &self.0 {
             match part {
                 EvalPart::Literal(s) => result.push_str(s.as_ref()),
                 EvalPart::VarRef(v) => {
                     for (i, env) in envs.iter().enumerate() {
-                        if let Some(v) = env.get_var(v.as_ref()) {
-                            v.evaluate_inner(result, &envs[i + 1..]);
-                            break;
+                        let v_as_ref = v.as_ref();
+                        if *escape_kind == EvalEscapeKind::ShellEscape {
+                            if let Some(es) = env.get_var_shell_escape(v_as_ref) {
+                                es.evaluate_inner(result, &envs[i + 1..], escape_kind);
+                                break;
+                            }
+                        } else {
+                            if let Some(es) = env.get_var(v_as_ref) {
+                                es.evaluate_inner(result, &envs[i + 1..], escape_kind);
+                                break;
+                            }
                         }
                     }
                 }
@@ -70,10 +87,10 @@ impl<T: AsRef<str>> EvalString<T> {
     /// its variables in the earliest Env that has them, and then those lookups
     /// will be recursively expanded starting from the env after the one that
     /// had the first successful lookup.
-    pub fn evaluate(&self, envs: &[&dyn Env]) -> String {
+    pub fn evaluate(&self, envs: &[&dyn Env], escape_kind: EvalEscapeKind) -> String {
         let mut result = String::new();
         result.reserve(self.calc_evaluated_length(envs));
-        self.evaluate_inner(&mut result, envs);
+        self.evaluate_inner(&mut result, envs, &escape_kind);
         result
     }
 }

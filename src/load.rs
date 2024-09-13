@@ -2,12 +2,13 @@
 
 use crate::{
     canon::{canon_path, canon_path_fast},
-    eval::{Env, EvalPart, EvalString},
-    graph::{FileId, RspFile},
-    parse::Statement,
+    db,
+    eval::{self, Env, EvalEscapeKind, EvalPart, EvalString},
+    graph::{self, FileId, RspFile},
+    parse::{self, Statement},
     scanner,
     smallmap::SmallMap,
-    {db, eval, graph, parse, trace},
+    trace,
 };
 use anyhow::{anyhow, bail};
 use std::collections::HashMap;
@@ -20,26 +21,81 @@ struct BuildImplicitVars<'a> {
     build: &'a graph::Build,
 }
 impl<'a> BuildImplicitVars<'a> {
-    fn file_list(&self, ids: &[FileId], sep: char) -> String {
+    fn file_list(&self, ids: &[FileId], sep: char, escape_kind: EvalEscapeKind) -> String {
         let mut out = String::new();
         for &id in ids {
             if !out.is_empty() {
                 out.push(sep);
             }
-            out.push_str(&self.graph.file(id).name);
+            let name = &self.graph.file(id).name;
+            if escape_kind == EvalEscapeKind::ShellEscape {
+                let e = Self::get_shell_escaped_string(name);
+                out.push_str(e.as_str());
+            } else {
+                out.push_str(name);
+            }
         }
         out
+    }
+    fn get_shell_escaped_string(s: &String) -> String {
+        let single_quote = String::from("\'");
+        let mut result = single_quote.clone();
+        result.push_str(&s.clone());
+        result.push_str(&single_quote);
+        result
+    }
+    fn string_to_evalstring(s: String) -> Option<EvalString<Cow<'a, str>>> {
+        Some(EvalString::new(vec![EvalPart::Literal(Cow::Owned(s))]))
     }
 }
 impl<'a> eval::Env for BuildImplicitVars<'a> {
     fn get_var(&self, var: &str) -> Option<EvalString<Cow<str>>> {
-        let string_to_evalstring =
-            |s: String| Some(EvalString::new(vec![EvalPart::Literal(Cow::Owned(s))]));
         match var {
-            "in" => string_to_evalstring(self.file_list(self.build.explicit_ins(), ' ')),
-            "in_newline" => string_to_evalstring(self.file_list(self.build.explicit_ins(), '\n')),
-            "out" => string_to_evalstring(self.file_list(self.build.explicit_outs(), ' ')),
-            "out_newline" => string_to_evalstring(self.file_list(self.build.explicit_outs(), '\n')),
+            "in" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_ins(),
+                ' ',
+                EvalEscapeKind::DoNotEscape,
+            )),
+            "in_newline" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_ins(),
+                '\n',
+                EvalEscapeKind::DoNotEscape,
+            )),
+            "out" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_outs(),
+                ' ',
+                EvalEscapeKind::DoNotEscape,
+            )),
+            "out_newline" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_outs(),
+                '\n',
+                EvalEscapeKind::DoNotEscape,
+            )),
+            _ => None,
+        }
+    }
+    fn get_var_shell_escape(&self, var: &str) -> Option<EvalString<Cow<str>>> {
+        match var {
+            "in" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_ins(),
+                ' ',
+                EvalEscapeKind::ShellEscape,
+            )),
+            "in_newline" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_ins(),
+                '\n',
+                EvalEscapeKind::ShellEscape,
+            )),
+            "out" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_outs(),
+                ' ',
+                EvalEscapeKind::ShellEscape,
+            )),
+            "out_newline" => BuildImplicitVars::string_to_evalstring(self.file_list(
+                self.build.explicit_outs(),
+                '\n',
+                EvalEscapeKind::ShellEscape,
+            )),
             _ => None,
         }
     }
@@ -65,14 +121,14 @@ impl<'a> Lookup<'a> {
             vars: SmallMap::default(),
         }
     }
-    pub fn find(&mut self, key: &'a str) -> Option<String> {
+    pub fn find(&mut self, key: &'a str, escape_kind: EvalEscapeKind) -> Option<String> {
         let mut combined_list: Vec<&dyn Env> = vec![&self.vars];
         self.envs.iter().for_each(|&value| {
             combined_list.push(value);
         });
         let result = match self.rule.get(key) {
-            Some(val) => Some(val.evaluate(combined_list.as_slice())),
-            None => Some(self.default_env.get(key)?.evaluate(&self.envs)),
+            Some(val) => Some(val.evaluate(combined_list.as_slice(), escape_kind)),
+            None => Some(self.default_env.get(key)?.evaluate(&self.envs, escape_kind)),
         };
         if result.is_some() {
             self.vars.insert(key, result.clone().unwrap());
@@ -113,7 +169,7 @@ impl Loader {
     }
 
     fn evaluate_path(&mut self, path: EvalString<&str>, envs: &[&dyn eval::Env]) -> FileId {
-        self.path(path.evaluate(envs))
+        self.path(path.evaluate(envs, EvalEscapeKind::DoNotEscape))
     }
 
     fn evaluate_paths(
@@ -168,8 +224,8 @@ impl Loader {
         let env_list: Vec<&dyn Env> = vec![&implicit_vars, build_vars, env];
         let mut lookup = Lookup::new(rule, env_list, build_vars);
 
-        let rspfile_path = lookup.find("rspfile");
-        let rspfile_content = lookup.find("rspfile_content");
+        let rspfile_path = lookup.find("rspfile", EvalEscapeKind::DoNotEscape);
+        let rspfile_content = lookup.find("rspfile_content", EvalEscapeKind::DoNotEscape);
         let rspfile = match (&rspfile_path, rspfile_content) {
             (None, None) => None,
             (Some(path), Some(content)) => Some(RspFile {
@@ -179,16 +235,16 @@ impl Loader {
             _ => bail!("rspfile and rspfile_content need to be both specified"),
         };
 
-        let cmdline = lookup.find("command");
-        let desc = lookup.find("description");
-        let depfile = lookup.find("depfile");
-        let parse_showincludes = match lookup.find("deps").as_deref() {
+        let cmdline = lookup.find("command", EvalEscapeKind::ShellEscape);
+        let desc = lookup.find("description", EvalEscapeKind::DoNotEscape);
+        let depfile = lookup.find("depfile", EvalEscapeKind::DoNotEscape);
+        let parse_showincludes = match lookup.find("deps", EvalEscapeKind::ShellEscape).as_deref() {
             None => false,
             Some("gcc") => false,
             Some("msvc") => true,
             Some(other) => bail!("invalid deps attribute {:?}", other),
         };
-        let pool = lookup.find("pool");
+        let pool = lookup.find("pool", EvalEscapeKind::DoNotEscape);
 
         build.cmdline = cmdline;
         build.desc = desc;

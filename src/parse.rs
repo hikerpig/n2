@@ -6,7 +6,7 @@
 //! text, marked with the lifetime `'text`.
 
 use crate::{
-    eval::{EvalPart, EvalString, Vars},
+    eval::{EvalEscapeKind, EvalPart, EvalString, Vars},
     scanner::{ParseError, ParseResult, Scanner},
     smallmap::SmallMap,
 };
@@ -96,7 +96,9 @@ impl<'text> Parser<'text> {
                             // be moved out of the parser, so that we can run
                             // multiple parsers in parallel and then evaluate
                             // all the variables in series at the end.
-                            let val = self.read_vardef()?.evaluate(&[&self.vars]);
+                            let val = self
+                                .read_vardef()?
+                                .evaluate(&[&self.vars], EvalEscapeKind::DoNotEscape);
                             self.vars.insert(ident, val);
                         }
                     }
@@ -172,7 +174,7 @@ impl<'text> Parser<'text> {
         let vars = self.read_scoped_vars(|var| matches!(var, "depth"))?;
         let mut depth = 0;
         if let Some((_, val)) = vars.into_iter().next() {
-            let val = val.evaluate(&[]);
+            let val = val.evaluate(&[], EvalEscapeKind::DoNotEscape);
             depth = match val.parse::<usize>() {
                 Ok(d) => d,
                 Err(err) => return self.scanner.parse_error(format!("pool depth: {}", err)),
